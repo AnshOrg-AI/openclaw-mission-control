@@ -6,8 +6,29 @@ import { useState, useEffect } from "react";
 import { Activity, Eye, RefreshCw, Play, Square } from "lucide-react";
 
 import { useAuth } from "@/auth/clerk";
+import { getLocalAuthToken, isLocalAuthMode } from "@/auth/localAuth";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import { Button } from "@/components/ui/button";
+
+async function resolveAuthHeader(): Promise<string> {
+  if (isLocalAuthMode()) {
+    const token = getLocalAuthToken();
+    return token ? `Bearer ${token}` : "";
+  }
+  // Clerk mode: pull token from the global Clerk session.
+  if (typeof window !== "undefined") {
+    const clerk = (window as unknown as { Clerk?: { session?: { getToken: () => Promise<string> } } }).Clerk;
+    if (clerk?.session) {
+      try {
+        const token = await clerk.session.getToken();
+        return token ? `Bearer ${token}` : "";
+      } catch {
+        return "";
+      }
+    }
+  }
+  return "";
+}
 
 // Agent status types from API
 interface AgentStatus {
@@ -49,10 +70,11 @@ export default function AgentWatcherPage() {
     if (!isSignedIn) return;
     setLoading(true);
     setError(null);
+    const authHeader = await resolveAuthHeader();
     try {
-      const token = localStorage.getItem("openclaw_token");      const res = await fetch("/api/v1/api/agents/status", {
+      const res = await fetch("/api/v1/agents/status", {
         headers: {
-          "Authorization": `Bearer ${token}`,
+          "Authorization": authHeader,
         },
       });
       if (res.ok) {
@@ -70,12 +92,12 @@ export default function AgentWatcherPage() {
 
   const restartAgent = async (agentName: string) => {
     setRestarting(agentName);
+    const authHeader = await resolveAuthHeader();
     try {
-      const token = localStorage.getItem("openclaw_token");
-      const res = await fetch(`/api/v1/api/agents/${agentName}/restart`, {
+      const res = await fetch(`/api/v1/agents/${agentName}/restart`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${token}`,
+          "Authorization": authHeader,
         },
       });
       if (res.ok) {

@@ -6,9 +6,29 @@ import { useState } from "react";
 import { Key, Plus, Trash2, Eye, EyeOff, Copy, Check } from "lucide-react";
 
 import { useAuth } from "@/auth/clerk";
+import { getLocalAuthToken, isLocalAuthMode } from "@/auth/localAuth";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
+async function resolveAuthHeader(): Promise<string> {
+  if (isLocalAuthMode()) {
+    const token = getLocalAuthToken();
+    return token ? `Bearer ${token}` : "";
+  }
+  if (typeof window !== "undefined") {
+    const clerk = (window as unknown as { Clerk?: { session?: { getToken: () => Promise<string> } } }).Clerk;
+    if (clerk?.session) {
+      try {
+        const token = await clerk.session.getToken();
+        return token ? `Bearer ${token}` : "";
+      } catch {
+        return "";
+      }
+    }
+  }
+  return "";
+};
 
 // Vault API types (based on backend routes)
 interface VaultItem {
@@ -35,11 +55,11 @@ export default function VaultPage() {
     if (!isSignedIn) return;
     setLoading(true);
     setError(null);
+    const authHeader = await resolveAuthHeader();
     try {
-      const token = localStorage.getItem("openclaw_token");
-      const res = await fetch("/api/v1/api/vault/list", {
+      const res = await fetch("/api/v1/vault/list", {
         headers: {
-          "Authorization": `Bearer ${token}`,
+          "Authorization": authHeader,
         },
       });
       if (res.ok) {
@@ -57,12 +77,12 @@ export default function VaultPage() {
 
   const addSecret = async () => {
     if (!newKey.trim() || !newValue.trim()) return;
+    const authHeader = await resolveAuthHeader();
     try {
-      const token = localStorage.getItem("openclaw_token");
-      const res = await fetch("/api/v1/api/vault/set", {
+      const res = await fetch("/api/v1/vault/set", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${token}`,
+          "Authorization": authHeader,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ key: newKey, value: newValue }),
@@ -78,12 +98,12 @@ export default function VaultPage() {
   };
 
   const deleteSecret = async (key: string) => {
+    const authHeader = await resolveAuthHeader();
     try {
-      const token = localStorage.getItem("openclaw_token");
-      const res = await fetch("/api/v1/api/vault/delete", {
+      const res = await fetch("/api/v1/vault/delete", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${token}`,
+          "Authorization": authHeader,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ key }),

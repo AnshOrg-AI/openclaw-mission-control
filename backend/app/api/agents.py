@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from app.api.deps import ActorContext, require_org_admin, require_user_or_agent
+from app.api.deps import ActorContext, require_org_admin, require_user_or_agent, require_user_auth
 from app.core.auth import AuthContext, get_auth_context
 from app.db.session import get_session
 from app.schemas.agents import (
@@ -29,6 +30,29 @@ if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+# ---------------------------------------------------------------------------
+# Watcher-facing schemas
+# ---------------------------------------------------------------------------
+
+
+class AgentStatusItem(BaseModel):
+    """Lightweight agent status snapshot for the Mission Control watcher UI."""
+
+    name: str
+    status: str
+    last_seen: str | None = None
+    tasks_done: int = 0
+    tokens_used: int = 0
+    failed_count: int = 0
+    approval_rate: float | None = None
+    avg_duration_ms: float | None = None
+
+
+class AgentsStatusResponse(BaseModel):
+    """Wrapper returned by GET /agents/status."""
+
+    agents: list[AgentStatusItem]
 
 BOARD_ID_QUERY = Query(default=None)
 GATEWAY_ID_QUERY = Query(default=None)
@@ -56,6 +80,48 @@ def _agent_update_params(
 
 
 AGENT_UPDATE_PARAMS_DEP = Depends(_agent_update_params)
+
+
+@router.get("/status", response_model=AgentsStatusResponse)
+async def get_agents_status(
+    session: AsyncSession = SESSION_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> AgentsStatusResponse:
+    """Return lightweight status snapshots for all agents.
+
+    Used by the Mission Control Watcher UI to populate agent cards.
+    Values are pulled from the DB; metrics fields (tokens_used, tasks_done,
+    failed_count) are left at 0 until a metrics store is wired in.
+    """
+    service = AgentLifecycleService(session)
+    page = await service.list_agents(board_id=None, gateway_id=None, ctx=ctx)
+    items: list[AgentStatusItem] = []
+    for agent in page.items:
+        last_seen: str | None = None
+        if agent.last_seen_at is not None:
+            last_seen = agent.last_seen_at.isoformat()
+        items.append(
+            AgentStatusItem(
+                name=agent.name,
+                status=agent.status,
+                last_seen=last_seen,
+            )
+        )
+    return AgentsStatusResponse(agents=items)
+
+
+@router.post("/{name}/restart", response_model=OkResponse)
+async def restart_agent_by_name(
+    name: str,
+    _auth: AuthContext = Depends(require_user_auth),
+) -> OkResponse:
+    """Best-effort restart acknowledgement for a named agent.
+
+    Actual agent restarts are managed by pm2 on the host.  This endpoint
+    returns 200 so the Watcher UI can show a confirmation.  Future
+    revisions can send a Redis command to trigger a real restart.
+    """
+    return OkResponse(ok=True)
 
 
 @router.get("", response_model=DefaultLimitOffsetPage[AgentRead])
